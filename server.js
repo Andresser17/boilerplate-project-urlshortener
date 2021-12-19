@@ -50,6 +50,15 @@ app.post("/api/shorturl", (req, res, next) => {
     // { family: 0, hints: dns.ADDRCONFIG | dns.V4MAPPED },
     (err, addr, family) => {
       if (err === null && addr !== null) {
+        for (let item in createdURLS) {
+          if (createdURLS[item] === url) {
+            return res.json({
+              original_url: url,
+              short_url: item,
+            });
+          }
+        }
+
         // Get key for new key:value pair
         const newKey = Object.keys(createdURLS).length + 1;
 
