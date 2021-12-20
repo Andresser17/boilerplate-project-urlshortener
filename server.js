@@ -3,14 +3,48 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 const dns = require("dns");
+const mongoose = require("mongoose");
+const shortId = require("shortid");
 const app = express();
 
-const createdURLS = {
-  // example: "https://google.com",
+// Basic configuration
+const port = process.env.PORT || 3000;
+
+// Database connection
+const db = async () =>
+  await mongoose.connect(process.env.MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  });
+
+db().catch((err) => console.log(err));
+
+// Declared schemas
+const shortedUrlSchema = new mongoose.Schema({
+  originalUrl: { type: String, required: true },
+  shortUrl: { type: String, required: true },
+});
+
+// Declared models
+const ShortedUrl = mongoose.model("ShortedUrl", shortedUrlSchema);
+
+// Declared methods
+const createShortedUrl = (originalUrl, shortUrl) => {
+  const shortedUrl = new ShortedUrl({
+    originalUrl,
+    shortUrl,
+  });
+
+  return shortedUrl.save();
 };
 
-// Basic Configuration
-const port = process.env.PORT || 3000;
+const getUrlByShort = (shortUrl) => {
+  return ShortedUrl.findOne({ shortUrl });
+};
+
+const getUrlByOrg = (originalUrl) => {
+  return ShortedUrl.findOne({ originalUrl });
+};
 
 app.use(cors());
 
@@ -29,53 +63,77 @@ app.get("/api/hello", function (req, res) {
   res.json({ greeting: "hello API" });
 });
 
-app.post("/api/shorturl", (req, res, next) => {
-  // To access POST variable use req.body() methods
-  const url = req.body.url;
+app.post(
+  "/api/shorturl",
+  (req, res, next) => {
+    // To access POST variable use req.body() methods
+    const url = req.body.url;
 
-  // Validate if url follow http://example.com format
-  const testRegex = /^http(s*):\/\//;
-  const tested = testRegex.test(url);
+    // Validate if url follow http://example.com format
+    const testRegex = /^http(s*):\/\//;
+    req.tested = testRegex.test(url);
 
-  if (!tested) {
+    // Validate URL with dns.lookup
+    const dnsRegex = /(\/+)/gi;
+    req.evalUrl = req.body.url.replace(dnsRegex, "").replace("https:", "");
+
+    next();
+  },
+  (req, res) => {
+    const url = req.body.url;
+
+    // Validate if url follow http://example.com format
+    const tested = req.tested;
+
+    if (!tested) {
+      return res.json({ error: "invalid url" });
+    }
+
+    // Validate URL with dns.lookup
+    const evalUrl = req.evalUrl;
+
+    dns.lookup(
+      evalUrl,
+      // { family: 0, hints: dns.ADDRCONFIG | dns.V4MAPPED },
+      async (err, addr, family) => {
+        // Check if provided url is valid
+        if (err !== null && addr === null) {
+          return res.json({ error: "invalid url" });
+        }
+
+        // Check if url exist in db
+        const itExist = await getUrlByOrg(url);
+
+        if (itExist) {
+          return res.json({
+            original_url: itExist.originalUrl,
+            short_url: itExist.shortUrl,
+          });
+        }
+
+        // Create new shortUrl document
+        const newUrl = shortId.generate();
+
+        const data = await createShortedUrl(url, newUrl);
+
+        res.json({
+          original_url: data.originalUrl,
+          short_url: data.shortUrl,
+        });
+      }
+    );
+  }
+);
+// 4jcxAij6J
+app.get("/api/shorturl/:shorturl", async (req, res) => {
+  const shortUrl = req.params.shorturl;
+  const data = await getUrlByShort(shortUrl);
+
+  if (!data) {
     return res.json({ error: "invalid url" });
   }
 
-  // Validate URL with dns.lookup
-  const dnsRegex = /(\/+)/gi;
-  const evalURL = req.body.url.replace(dnsRegex, "").replace("https:", "");
-
-  dns.lookup(
-    evalURL,
-    // { family: 0, hints: dns.ADDRCONFIG | dns.V4MAPPED },
-    (err, addr, family) => {
-      if (err === null && addr !== null) {
-        for (let item in createdURLS) {
-          if (createdURLS[item] === url) {
-            return res.json({
-              original_url: url,
-              short_url: item,
-            });
-          }
-        }
-
-        // Get key for new key:value pair
-        const newKey = Object.keys(createdURLS).length + 1;
-
-        createdURLS[newKey] = url;
-
-        res.json({ original_url: url, short_url: newKey });
-      } else {
-        res.json({ error: "invalid url" });
-      }
-    }
-  );
-});
-
-app.get("/api/shorturl/:shorturl", (req, res) => {
-  const shorturl = req.params.shorturl;
-
-  res.redirect(createdURLS[shorturl]);
+  res.redirect(data.originalUrl);
 });
 
 app.listen(port, function () {
